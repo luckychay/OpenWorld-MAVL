@@ -945,7 +945,7 @@ def build(args):
 
     losses = ["labels", "boxes", "cardinality"]
     ###
-    if args.NC_branch:
+    if args.novelty_cls:
         losses = ["labels", "labels_nc", "boxes", "cardinality"]
     ###
     if args.masks:
@@ -959,7 +959,8 @@ def build(args):
     criterion = None
     if not args.no_detection:
         criterion = SetCriterion(
-            num_classes,
+            args,
+            num_classes=args.num_classes,
             matcher=matcher,
             eos_coef=args.eos_coef,
             losses=losses,

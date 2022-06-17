@@ -58,7 +58,7 @@ UNK_CLASS = ["unknown"]
 VOC_COCO_CLASS_NAMES = tuple(itertools.chain(VOC_CLASS_NAMES, T2_CLASS_NAMES, T3_CLASS_NAMES, T4_CLASS_NAMES, UNK_CLASS))
 print(VOC_COCO_CLASS_NAMES)
 
-class OWDetection(VisionDataset):
+class OWOD(VisionDataset):
     """`OWOD in Pascal VOC format <http://host.robots.ox.ac.uk/pascal/VOC/>`_ Detection Dataset.
 
     Args:
@@ -87,7 +87,7 @@ class OWDetection(VisionDataset):
                  transforms=None,
                  no_cats=False,
                  filter_pct=-1):
-        super(OWDetection, self).__init__(root, transforms, transform, target_transform)
+        super(OWOD, self).__init__(root, transforms, transform, target_transform)
         self.images = []
         self.annotations = []
         self.imgids = []
@@ -110,8 +110,8 @@ class OWDetection(VisionDataset):
 
             # base_dir = DATASET_YEAR_DICT[year]['base_dir']
             voc_root = self.root
-            annotation_dir = os.path.join(voc_root, 'Annotations')
-            image_dir = os.path.join(voc_root, 'JPEGImages')
+            annotation_dir = os.path.join(voc_root, "Annotations")
+            image_dir = os.path.join("/content/drive/MyDrive/", "JPEGImages")
 
             if not os.path.isdir(voc_root):
                 raise RuntimeError('Dataset not found or corrupted.' +

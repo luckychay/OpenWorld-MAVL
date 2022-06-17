@@ -25,7 +25,7 @@ from datasets.flickr_eval import FlickrEvaluator
 from datasets.phrasecut_eval import PhrasecutEvaluator
 from datasets.refexp import RefExpEvaluator
 from datasets.coco import make_coco_transforms
-from datasets.torchvision_datasets.open_world import OWDetection
+from datasets.torchvision_datasets.owod import OWOD
 from engine import evaluate, train_one_epoch
 from models import build_model
 from models.postprocessors import build_postprocessors
@@ -268,6 +268,7 @@ def get_args_parser():
     )
     # Loss coefficients
     parser.add_argument("--ce_loss_coef", default=1, type=float)
+    parser.add_argument("--cls_loss_coef", default=1, type=float)
     parser.add_argument("--mask_loss_coef", default=1, type=float)
     parser.add_argument("--dice_loss_coef", default=1, type=float)
     parser.add_argument("--bbox_loss_coef", default=5, type=float)
@@ -308,14 +309,13 @@ def get_args_parser():
     parser.add_argument('--pretrain', default='', help='initialized from the pre-training model')
     parser.add_argument('--train_set', default='', help='training txt files')
     parser.add_argument('--test_set', default='', help='testing txt files')
-    parser.add_argument('--NC_branch', default=False, action='store_true')
+    parser.add_argument('--novelty_cls', default=False, action='store_true')
     parser.add_argument('--nc_loss_coef', default=2, type=float)
     parser.add_argument('--invalid_cls_logits', default=False, action='store_true', help='owod setting')
     parser.add_argument('--nc_epoch', default=0, type=int)
     parser.add_argument('--num_classes', default=81, type=int)
-    parser.add_argument('--backbone', default='resnet50', type=str, help="Name of the convolutional backbone to use")
     parser.add_argument('--dataset', default='owod')
-    parser.add_argument('--data_root', default='../data/OWDETR', type=str)
+    parser.add_argument('--data_root', default='./data', type=str)
     parser.add_argument('--bbox_thresh', default=0.3, type=float)
    
     return parser
@@ -345,12 +345,12 @@ def main(args):
     device = torch.device(args.device)
     output_dir = Path(args.output_dir)
 
-    # fix the seed for reproducibility
-    seed = args.seed + dist.get_rank()
-    torch.manual_seed(seed)
-    np.random.seed(seed)
-    random.seed(seed)
-    torch.set_deterministic(True)
+    # # fix the seed for reproducibility
+    # seed = args.seed + dist.get_rank()
+    # torch.manual_seed(seed)
+    # np.random.seed(seed)
+    # random.seed(seed)
+    # torch.set_deterministic(True)
 
     # Build the model
     model, criterion, contrastive_criterion, qa_criterion, weight_dict = build_model(args)
@@ -394,9 +394,9 @@ def main(args):
     else:
         raise RuntimeError(f"Unsupported optimizer {args.optimizer}")
 
-    # Train dataset
-    if len(args.combine_datasets) == 0 and not args.eval:
-        raise RuntimeError("Please provide at least one training dataset")
+    # # Train dataset
+    # if len(args.combine_datasets) == 0 and not args.eval:
+    #     raise RuntimeError("Please provide at least one training dataset")
 
     dataset_train, sampler_train, data_loader_train = None, None, None
     dataset_train, dataset_val = get_datasets(args)
@@ -443,9 +443,9 @@ def main(args):
                 num_workers=args.num_workers,
             )
 
-    # Val dataset
-    if len(args.combine_datasets_val) == 0:
-        raise RuntimeError("Please provide at leas one validation dataset")
+    # # Val dataset
+    # if len(args.combine_datasets_val) == 0:
+    #     raise RuntimeError("Please provide at leas one validation dataset")
 
     Val_all = namedtuple(typename="val_data", field_names=["dataset_name", "dataloader", "base_ds", "evaluator_list"])
     val_tuples = []
@@ -687,11 +687,9 @@ def main(args):
 
 def get_datasets(args):
     print(args.dataset)
-    if args.dataset == 'owod':
-        train_set = args.train_set
-        test_set = args.test_set
-        dataset_train = OWDetection(args, args.owod_path, ["2007"], image_sets=[args.train_set], transforms=make_coco_transforms(args.train_set))
-        dataset_val = OWDetection(args, args.owod_path, ["2007"], image_sets=[args.test_set], transforms=make_coco_transforms(args.test_set))
+    if args.dataset == "owod":
+        dataset_train = OWOD(args, args.owod_path, ["2007"], image_sets=[args.train_set], transforms=make_coco_transforms(args.train_set))
+        dataset_val = OWOD(args, args.owod_path, ["2007"], image_sets=[args.test_set], transforms=make_coco_transforms(args.test_set))
     else:
         raise ValueError("Wrong dataset name")
 
