@@ -20,6 +20,13 @@ from util.metrics import MetricLogger, SmoothedValue
 from util.misc import targets_to
 from util.optim import adjust_learning_rate, update_ema
 
+###
+from datasets.open_world_eval import OWEvaluator
+from datasets.data_prefetcher import data_prefetcher
+from util.box_ops import box_xyxy_to_cxcywh, box_cxcywh_to_xyxy
+from util.plot_utils import plot_prediction
+import matplotlib.pyplot as plt
+import copy
 
 def train_one_epoch(
     model: torch.nn.Module,
@@ -31,6 +38,7 @@ def train_one_epoch(
     optimizer: torch.optim.Optimizer,
     device: torch.device,
     epoch: int,
+    epoch_nc: int,
     args,
     max_norm: float = 0,
     model_ema: Optional[torch.nn.Module] = None,
@@ -48,6 +56,11 @@ def train_one_epoch(
     metric_logger.add_meter("lr_text_encoder", SmoothedValue(window_size=1, fmt="{value:.6f}"))
     header = "Epoch: [{}]".format(epoch)
     print_freq = 10
+
+    ###
+    prefetcher = data_prefetcher(data_loader, device, prefetch=True)
+    samples, targets = prefetcher.next()
+    ###
 
     num_training_steps = int(len(data_loader) * args.epochs)
     for i, batch_dict in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
@@ -68,7 +81,15 @@ def train_one_epoch(
 
         loss_dict = {}
         if criterion is not None:
-            loss_dict.update(criterion(outputs, targets))  # Update criterion to account for targets only
+            loss_dict.update(criterion(outputs, targets, epoch))  # Update criterion to account for targets only
+
+        weight_dict = copy.deepcopy(criterion.weight_dict)
+        ## condition for starting nc loss computation after certain epoch so that the F_cls branch has the time
+        ## to learn the within classes seperation.
+        if epoch < epoch.nc: 
+            for k,v in weight_dict.items():
+                if 'NC' in k:
+                    weight_dict[k] = 0
 
         if contrastive_criterion is not None:
             assert memory_cache is not None
@@ -131,6 +152,8 @@ def evaluate(  # TODO: Revisit evaluator as per the minus_language thing
     data_loader,
     evaluator_list,
     device: torch.device,
+    base_ds,
+    output_dir,
     args,
 ):
     model.eval()
@@ -143,6 +166,12 @@ def evaluate(  # TODO: Revisit evaluator as per the minus_language thing
 
     metric_logger = MetricLogger(delimiter="  ")
     header = "Test:"
+
+    ###
+    iou_types = tuple(k for k in ('segm', 'bbox') if k in postprocessors.keys())
+    coco_evaluator = OWEvaluator(base_ds, iou_types)
+    evaluator_list.append(coco_evaluator)
+    ###
 
     for batch_dict in metric_logger.log_every(data_loader, 10, header):
         samples = batch_dict["samples"].to(device)
@@ -186,6 +215,7 @@ def evaluate(  # TODO: Revisit evaluator as per the minus_language thing
         if not args.no_detection:
             orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)
             results = postprocessors["bbox"](outputs, orig_target_sizes)
+            
             if "segm" in postprocessors.keys():
                 target_sizes = torch.stack([t["size"] for t in targets], dim=0)
                 results = postprocessors["segm"](results, outputs, orig_target_sizes, target_sizes)

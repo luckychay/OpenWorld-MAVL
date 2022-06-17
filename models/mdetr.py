@@ -46,6 +46,8 @@ class MDETR(nn.Module):
             qa_dataset: Optional[str] = None,
             split_qa_heads=True,
             predict_final=False,
+            unmatched_boxes=False, 
+            novelty_cls=False,
     ):
         """Initializes the model.
 
@@ -73,6 +75,12 @@ class MDETR(nn.Module):
         self.bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3)
         self.query_embed = nn.Embedding(num_queries, 2*hidden_dim)
         self.num_feature_levels = num_feature_levels
+        ###
+        self.unmatched_boxes = unmatched_boxes
+        self.novelty_cls = novelty_cls
+        if self.novelty_cls:
+            self.nc_class_embed = nn.Linear(hidden_dim, 1)
+        ###
         if qa_dataset is not None:
             nb_heads = 6 if qa_dataset == "gqa" else 4
             self.qa_embed = nn.Embedding(nb_heads if split_qa_heads else 1, hidden_dim)
@@ -114,6 +122,10 @@ class MDETR(nn.Module):
             nn.init.constant_(self.bbox_embed.layers[-1].bias.data[2:], -2.0)
             self.class_embed = nn.ModuleList([self.class_embed for _ in range(num_pred)])
             self.bbox_embed = nn.ModuleList([self.bbox_embed for _ in range(num_pred)])
+            ###
+            if self.novelty_cls:
+                self.nc_class_embed = nn.ModuleList([self.nc_class_embed for _ in range(num_pred)])
+            ###
             self.transformer.decoder.bbox_embed = None
 
         if contrastive_loss:
@@ -247,6 +259,9 @@ class MDETR(nn.Module):
 
             outputs_classes = []
             outputs_coords = []
+            ###
+            outputs_classes_nc = []
+            ###
             for lvl in range(hs.shape[0]):
                 if lvl == 0:
                     reference = init_reference
@@ -254,6 +269,10 @@ class MDETR(nn.Module):
                     reference = inter_references[lvl - 1]
                 reference = inverse_sigmoid(reference)
                 outputs_class = self.class_embed[lvl](hs[lvl])
+                ### novelty classification
+                if self.novelty_cls:
+                    outputs_class_nc = self.nc_class_embed[lvl](hs[lvl])
+                ###
                 tmp = self.bbox_embed[lvl](hs[lvl])
                 if reference.shape[-1] == 4:
                     tmp += reference
@@ -262,9 +281,17 @@ class MDETR(nn.Module):
                     tmp[..., :2] += reference
                 outputs_coord = tmp.sigmoid()
                 outputs_classes.append(outputs_class)
+                ###
+                if self.novelty_cls:
+                    outputs_classes_nc.append(outputs_class_nc)
+                ###
                 outputs_coords.append(outputs_coord)
             outputs_class = torch.stack(outputs_classes)
             outputs_coord = torch.stack(outputs_coords)
+            ###
+            if self.novelty_cls:
+                outputs_class_nc = torch.stack(outputs_classes_nc)
+            ###
 
             # outputs_class = self.class_embed(hs)
             # outputs_coord = self.bbox_embed(hs).sigmoid()
@@ -274,6 +301,17 @@ class MDETR(nn.Module):
                     "pred_boxes": outputs_coord[-1],
                 }
             )
+            ###
+            if self.novelty_cls:
+                out.update(
+                {
+                    "pred_logits": outputs_class[-1],
+                    "pred_logits_nc": outputs_class_nc[-1],
+                    "pred_boxes": outputs_coord[-1],
+                }
+            )
+            ###
+
             outputs_isfinal = None
             if self.isfinal_embed is not None:
                 outputs_isfinal = self.isfinal_embed(hs)
@@ -287,6 +325,15 @@ class MDETR(nn.Module):
                     }
                     for a, b in zip(outputs_class[:-1], outputs_coord[:-1])
                 ]
+                if self.novelty_cls:
+                    out["aux_outputs"] = [
+                        {
+                            "pred_logits": a,
+                            "pred_logits_nc": c,
+                            "pred_boxes": b,
+                        }
+                        for a, c, b in zip(outputs_class[:-1], outputs_class_nc[:-1], outputs_coord[:-1])
+                    ]
                 if outputs_isfinal is not None:
                     assert len(outputs_isfinal[:-1]) == len(out["aux_outputs"])
                     for i in range(len(outputs_isfinal[:-1])):
@@ -475,7 +522,7 @@ class SetCriterion(nn.Module):
         2) we supervise each pair of matched ground-truth / prediction (supervise class and box)
     """
 
-    def __init__(self, num_classes, matcher, eos_coef, losses, temperature, focal_alpha=0.25):
+    def __init__(self, args, num_classes, matcher, eos_coef, losses, temperature, invalid_cls_logits, focal_alpha=0.25):
         """Create the criterion.
         Parameters:
             num_classes: number of object categories, omitting the special no-object category
@@ -493,6 +540,16 @@ class SetCriterion(nn.Module):
         empty_weight[-1] = self.eos_coef
         self.register_buffer("empty_weight", empty_weight)
         self.focal_alpha = focal_alpha
+
+        ###
+        self.nc_epoch = args.nc_epoch
+        self.output_dir = args.output_dir
+        self.invalid_cls_logits = invalid_cls_logits
+        self.unmatched_boxes = args.unmatched_boxes
+        self.top_unk = args.top_unk
+        self.bbox_thresh = args.bbox_thresh
+        self.num_seen_classes = args.PREV_INTRODUCED_CLS + args.CUR_INTRODUCED_CLS
+        ###
 
     def loss_isfinal(self, outputs, targets, indices, num_boxes):
         """This loss is used in some referring expression dataset (specifically Clevr-REF+)
@@ -517,15 +574,50 @@ class SetCriterion(nn.Module):
 
         return losses
 
-    def loss_labels(self, outputs, targets, indices, num_boxes):
+    ###
+    def loss_labels_nc(self, outputs, targets, indices, num_boxes, current_epoch, owod_targets, owod_indices, log=True):
+        """Novelty classification loss
+        target labels will contain class as 1
+        owod_indices -> indices combining matched indices + psuedo labeled indices
+        owod_targets -> targets combining GT targets + psuedo labeled unknown targets
+        target_classes_o -> contains all 1's
+        """
+        assert 'pred_nc_logits' in outputs
+        src_logits = outputs['pred_nc_logits']
+
+        idx = self._get_src_permutation_idx(owod_indices)
+        target_classes_o = torch.cat([torch.full_like(t["labels"][J], 0) for t, (_, J) in zip(owod_targets, owod_indices)])
+        target_classes = torch.full(src_logits.shape[:2], 1, dtype=torch.int64, device=src_logits.device)
+        target_classes[idx] = target_classes_o
+
+        target_classes_onehot = torch.zeros([src_logits.shape[0], src_logits.shape[1], src_logits.shape[2] + 1], dtype=src_logits.dtype, layout=src_logits.layout, device=src_logits.device)
+        target_classes_onehot.scatter_(2, target_classes.unsqueeze(-1), 1)
+
+        target_classes_onehot = target_classes_onehot[:,:,:-1]
+        loss_ce = sigmoid_focal_loss(src_logits, target_classes_onehot, num_boxes, alpha=self.focal_alpha, gamma=2) * src_logits.shape[1]
+
+        losses = {'loss_NC': loss_ce}
+        return losses
+
+    def loss_labels(self, outputs, targets, indices, num_boxes, owod_targets, owod_indices):
         """Classification loss (NLL)
         targets dicts must contain the key "labels" containing a tensor of dim [nb_target_boxes]
         """
         assert 'pred_logits' in outputs
-        src_logits = outputs['pred_logits']
+        # src_logits = outputs['pred_logits']
 
-        idx = self._get_src_permutation_idx(indices)
-        target_classes_o = torch.cat([t["labels"][J] for t, (_, J) in zip(targets, indices)])
+        ###
+        temp_src_logits = outputs['pred_logits'].clone()
+        temp_src_logits[:,:, self.invalid_cls_logits] = -10e10
+        src_logits = temp_src_logits
+
+        if self.unmatched_boxes:
+            idx = self._get_src_permutation_idx(owod_indices)
+            target_classes_o = torch.cat([t["labels"][J] for t, (_, J) in zip(owod_targets, owod_indices)])
+        else:
+            idx = self._get_src_permutation_idx(indices)
+            target_classes_o = torch.cat([t["labels"][J] for t, (_, J) in zip(targets, indices)])
+        ###
         target_classes = torch.full(src_logits.shape[:2], self.num_classes,
                                     dtype=torch.int64, device=src_logits.device)
         target_classes[idx] = target_classes_o
@@ -548,14 +640,23 @@ class SetCriterion(nn.Module):
         raise NotImplementedError
 
     @torch.no_grad()
-    def loss_cardinality(self, outputs, targets, indices, num_boxes):
+    def loss_cardinality(self, outputs, targets, indices, num_boxes,owod_targets, owod_indices):
         """Compute the cardinality error, ie the absolute error in the number of predicted non-empty boxes
         This is not really a loss, it is intended for logging purposes only. It doesn't propagate gradients
         """
-        pred_logits = outputs["pred_logits"]
+        # pred_logits = outputs["pred_logits"]
+
+        ###
+        temp_pred_logits = outputs['pred_logits'].clone()
+        temp_pred_logits[:,:, self.invalid_cls_logits] = -10e10
+        pred_logits = temp_pred_logits
+        ###
+
         device = pred_logits.device
-        tgt_lengths = torch.as_tensor([len(v["labels"]) for v in targets], device=device)
-        ## Count the number of predictions that are NOT "no-object" (which is the last class)
+        if self.unmatched_boxes:
+            tgt_lengths = torch.as_tensor([len(v["labels"]) for v in owod_targets], device=device)
+        else:
+            tgt_lengths = torch.as_tensor([len(v["labels"]) for v in targets], device=device)        ## Count the number of predictions that are NOT "no-object" (which is the last class)
         # normalized_text_emb = outputs["proj_tokens"]  # BS x (num_tokens) x hdim
         # normalized_img_emb = outputs["proj_queries"]  # BS x (num_queries) x hdim
 
@@ -629,9 +730,10 @@ class SetCriterion(nn.Module):
         tgt_idx = torch.cat([tgt for (_, tgt) in indices])
         return batch_idx, tgt_idx
 
-    def get_loss(self, loss, outputs, targets, indices, num_boxes, **kwargs):
+    def get_loss(self, loss, outputs, targets, indices, num_boxes, epoch, owod_targets, owod_indices, **kwargs):
         loss_map = {
             "labels": self.loss_labels,
+            "labels_nc": self.loss_labels_nc,
             "cardinality": self.loss_cardinality,
             "boxes": self.loss_boxes,
             "masks": self.loss_masks,
@@ -639,19 +741,50 @@ class SetCriterion(nn.Module):
             "contrastive_align": self.loss_contrastive_align,
         }
         assert loss in loss_map, f"do you really want to compute {loss} loss?"
-        return loss_map[loss](outputs, targets, indices, num_boxes, **kwargs)
+        return loss_map[loss](outputs, targets, indices, num_boxes, epoch, owod_targets, owod_indices, **kwargs)
 
-    def forward(self, outputs, targets):
+    def forward(self, outputs, targets, epoch):
         """This performs the loss computation.
         Parameters:
              outputs: dict of tensors, see the output specification of the model for the format
              targets: list of dicts, such that len(targets) == batch_size.
                       The expected keys in each dict depends on the losses applied, see each loss' doc
         """
-        outputs_without_aux = {k: v for k, v in outputs.items() if k != "aux_outputs"}
+        ###
+        if self.nc_epoch > 0:
+            loss_epoch = 9
+        else:
+            loss_epoch = 0
+        ###
 
+        outputs_without_aux = {k: v for k, v in outputs.items() if k != "aux_outputs"}
         # Retrieve the matching between the outputs of the last layer and the targets
         indices = self.matcher(outputs_without_aux, targets)
+
+        ###
+        owod_targets = copy.deepcopy(targets)
+        owod_indices = copy.deepcopy(indices)
+        owod_outputs = outputs_without_aux.copy()
+        owod_device = owod_outputs["pred_boxes"].device
+         
+        if self.unmatched_boxes and epoch >= loss_epoch:
+            ## use unmatched boxes as an unknown object finder
+            print("waiting for implementation.")
+            queries = torch.arange(outputs['pred_logits'].shape[1])
+            for i in range(len(indices)):
+                combined = torch.cat((queries, self._get_src_single_permutation_idx(indices[i], i)[-1])) ## need to fix the indexing
+                uniques, counts = combined.unique(return_counts=True)
+                unmatched_indices = uniques[counts == 1]
+                objectnesses =  outputs['pred_logits'][i][unmatched_indices]
+                _, topk_inds =  torch.topk(objectnesses, self.top_unk)
+                topk_inds = torch.as_tensor(topk_inds)
+                    
+                topk_inds = topk_inds.cpu()
+
+                unk_label = torch.as_tensor([self.num_classes-1], device=owod_device)
+                owod_targets[i]['labels'] = torch.cat((owod_targets[i]['labels'], unk_label.repeat_interleave(self.top_unk)))
+                owod_indices[i] = (torch.cat((owod_indices[i][0], topk_inds)), torch.cat((owod_indices[i][1], (owod_targets[i]['labels'] == unk_label).nonzero(as_tuple=True)[0].cpu())))
+        ###
 
         # Compute the average number of target boxes accross all nodes, for normalization purposes
         num_boxes = sum(len(t["labels"]) for t in targets)
@@ -663,18 +796,29 @@ class SetCriterion(nn.Module):
         # Compute all the requested losses
         losses = {}
         for loss in self.losses:
-            losses.update(self.get_loss(loss, outputs, targets, indices, num_boxes))
+            losses.update(self.get_loss(loss, outputs, targets, indices, num_boxes, epoch, owod_targets, owod_indices))
 
         # In case of auxiliary losses, we repeat this process with the output of each intermediate layer.
         if "aux_outputs" in outputs:
             for i, aux_outputs in enumerate(outputs["aux_outputs"]):
                 indices = self.matcher(aux_outputs, targets)
+
+                ###
+                owod_targets = copy.deepcopy(targets)
+                owod_indices = copy.deepcopy(indices)
+                aux_owod_outputs = aux_outputs.copy()
+                owod_device = aux_owod_outputs["pred_boxes"].device
+
+                if self.unmatched_boxes and epoch >= loss_epoch:
+                    print("waiting for implementation.")
+                ###
+
                 for loss in self.losses:
                     if loss == "masks":
                         # Intermediate masks losses are too costly to compute, we ignore them.
                         continue
                     kwargs = {}
-                    l_dict = self.get_loss(loss, aux_outputs, targets, indices, num_boxes, **kwargs)
+                    l_dict = self.get_loss(loss, aux_outputs, targets, indices, num_boxes, epoch, owod_targets, owod_indices, **kwargs)
                     l_dict = {k + f"_{i}": v for k, v in l_dict.items()}
                     losses.update(l_dict)
 
@@ -697,7 +841,8 @@ class MLP(nn.Module):
 
 
 def build(args):
-    num_classes = 1
+    # num_classes = 1
+    num_classes = args.num_classes
     device = torch.device(args.device)
 
     assert not args.masks or args.mask_model != "none"
@@ -722,6 +867,14 @@ def build(args):
     else:
         transformer = build_transformer(args)
 
+    ###
+    prev_intro_cls = args.PREV_INTRODUCED_CLS
+    curr_intro_cls = args.CUR_INTRODUCED_CLS
+    seen_classes = prev_intro_cls + curr_intro_cls
+    invalid_cls_logits = list(range(seen_classes, num_classes-1)) #unknown class indx will not be included in the invalid class range
+    print("Invalid class rangw: " + str(invalid_cls_logits))
+    ###
+
     model = MDETR(
         backbone,
         transformer,
@@ -735,6 +888,8 @@ def build(args):
         qa_dataset=qa_dataset,
         split_qa_heads=args.split_qa_heads,
         predict_final=args.predict_final,
+        unmatched_boxes=args.unmatched_boxes,
+        novelty_cls=args.novelty_cls,
     )
     if args.mask_model != "none":
         model = DETRsegm(
@@ -743,7 +898,14 @@ def build(args):
             freeze_detr=(args.frozen_weights is not None),
         )
     matcher = build_matcher(args)
+
     weight_dict = {"loss_ce": args.ce_loss_coef, "loss_bbox": args.bbox_loss_coef}
+        
+    ###
+    if args.novelty_cls:
+        weight_dict = {'loss_ce': args.cls_loss_coef, 'loss_nc': args.nc_loss_coef, 'loss_bbox': args.bbox_loss_coef}
+    ###
+    
     if args.contrastive_loss:
         weight_dict["contrastive_loss"] = args.contrastive_loss_coef
     if args.contrastive_align_loss:
@@ -782,6 +944,10 @@ def build(args):
         weight_dict.update(aux_weight_dict)
 
     losses = ["labels", "boxes", "cardinality"]
+    ###
+    if args.NC_branch:
+        losses = ["labels", "labels_nc", "boxes", "cardinality"]
+    ###
     if args.masks:
         losses += ["masks"]
     if args.predict_final:
@@ -798,6 +964,7 @@ def build(args):
             eos_coef=args.eos_coef,
             losses=losses,
             temperature=args.temperature_NCE,
+            invalid_cls_logits=invalid_cls_logits
         )
         criterion.to(device)
 

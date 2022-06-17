@@ -24,6 +24,8 @@ from datasets.coco_eval import CocoEvaluator
 from datasets.flickr_eval import FlickrEvaluator
 from datasets.phrasecut_eval import PhrasecutEvaluator
 from datasets.refexp import RefExpEvaluator
+from datasets.coco import make_coco_transforms
+from datasets.torchvision_datasets.open_world import OWDetection
 from engine import evaluate, train_one_epoch
 from models import build_model
 from models.postprocessors import build_postprocessors
@@ -296,8 +298,27 @@ def get_args_parser():
     # Distributed training parameters
     parser.add_argument("--world-size", default=1, type=int, help="number of distributed processes")
     parser.add_argument("--dist-url", default="env://", help="url used to set up distributed training")
+   
+    ## OWOD
+    parser.add_argument('--PREV_INTRODUCED_CLS', default=0, type=int)
+    parser.add_argument('--CUR_INTRODUCED_CLS', default=20, type=int)
+    parser.add_argument('--top_unk', default=5, type=int)
+    parser.add_argument('--unmatched_boxes', default=False, action='store_true')
+    parser.add_argument('--featdim', default=1024, type=int)
+    parser.add_argument('--pretrain', default='', help='initialized from the pre-training model')
+    parser.add_argument('--train_set', default='', help='training txt files')
+    parser.add_argument('--test_set', default='', help='testing txt files')
+    parser.add_argument('--NC_branch', default=False, action='store_true')
+    parser.add_argument('--nc_loss_coef', default=2, type=float)
+    parser.add_argument('--invalid_cls_logits', default=False, action='store_true', help='owod setting')
+    parser.add_argument('--nc_epoch', default=0, type=int)
+    parser.add_argument('--num_classes', default=81, type=int)
+    parser.add_argument('--backbone', default='resnet50', type=str, help="Name of the convolutional backbone to use")
+    parser.add_argument('--dataset', default='owod')
+    parser.add_argument('--data_root', default='../data/OWDETR', type=str)
+    parser.add_argument('--bbox_thresh', default=0.3, type=float)
+   
     return parser
-
 
 def main(args):
     # Init distributed mode
@@ -378,10 +399,8 @@ def main(args):
         raise RuntimeError("Please provide at least one training dataset")
 
     dataset_train, sampler_train, data_loader_train = None, None, None
+    dataset_train, dataset_val = get_datasets(args)
     if not args.eval:
-        dataset_train = ConcatDataset(
-            [build_dataset(name, image_set="train", args=args) for name in args.combine_datasets]
-        )
 
         # To handle very big datasets, we chunk it into smaller parts.
         if args.epoch_chunks > 0:
@@ -429,23 +448,32 @@ def main(args):
         raise RuntimeError("Please provide at leas one validation dataset")
 
     Val_all = namedtuple(typename="val_data", field_names=["dataset_name", "dataloader", "base_ds", "evaluator_list"])
-
     val_tuples = []
-    for dset_name in args.combine_datasets_val:
-        dset = build_dataset(dset_name, image_set="val", args=args)
-        sampler = (
-            DistributedSampler(dset, shuffle=False) if args.distributed else torch.utils.data.SequentialSampler(dset)
-        )
-        dataloader = DataLoader(
-            dset,
-            args.batch_size,
-            sampler=sampler,
-            drop_last=False,
-            collate_fn=partial(utils.collate_fn, False),
-            num_workers=args.num_workers,
-        )
-        base_ds = get_coco_api_from_dataset(dset)
-        val_tuples.append(Val_all(dataset_name=dset_name, dataloader=dataloader, base_ds=base_ds, evaluator_list=None))
+    # for dset_name in args.combine_datasets_val:
+    #     dset = build_dataset(dset_name, image_set="val", args=args)
+    #     sampler = (
+    #         DistributedSampler(dset, shuffle=False) if args.distributed else torch.utils.data.SequentialSampler(dset)
+    #     )
+    #     dataloader = DataLoader(
+    #         dset,
+    #         args.batch_size,
+    #         sampler=sampler,
+    #         drop_last=False,
+    #         collate_fn=partial(utils.collate_fn, False),
+    #         num_workers=args.num_workers,
+    #     )
+    #     base_ds = get_coco_api_from_dataset(dset)
+    #     val_tuples.append(Val_all(dataset_name=dset_name, dataloader=dataloader, base_ds=base_ds, evaluator_list=None))
+
+    sampler_val = (
+            DistributedSampler(dataset_val, shuffle=False) if args.distributed else torch.utils.data.SequentialSampler(dataset_val)
+         )
+    data_loader_val = DataLoader(dataset_val, args.batch_size, sampler=sampler_val,
+                                 drop_last=False, collate_fn=utils.collate_fn, num_workers=args.num_workers,
+                                 pin_memory=True)
+    base_ds = get_coco_api_from_dataset(dataset_val)
+    val_tuples.append(Val_all(dataset_name="coco", dataloader=data_loader_val, base_ds=base_ds, evaluator_list=None))
+
 
     if args.frozen_weights is not None:
         if args.resume.startswith("https"):
@@ -657,10 +685,32 @@ def main(args):
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     print("Training time {}".format(total_time_str))
 
+def get_datasets(args):
+    print(args.dataset)
+    if args.dataset == 'owod':
+        train_set = args.train_set
+        test_set = args.test_set
+        dataset_train = OWDetection(args, args.owod_path, ["2007"], image_sets=[args.train_set], transforms=make_coco_transforms(args.train_set))
+        dataset_val = OWDetection(args, args.owod_path, ["2007"], image_sets=[args.test_set], transforms=make_coco_transforms(args.test_set))
+    else:
+        raise ValueError("Wrong dataset name")
+
+    print(args.dataset)
+    print(args.train_set)
+    print(args.test_set)
+    print(dataset_train)
+    print(dataset_val)
+
+    return dataset_train, dataset_val
+
+
+def set_dataset_path(args):
+    args.owod_path = os.path.join(args.data_root, 'VOC2007')
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser("DETR training and evaluation script", parents=[get_args_parser()])
     args = parser.parse_args()
+    set_dataset_path(args)
     if args.output_dir:
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)
     main(args)
