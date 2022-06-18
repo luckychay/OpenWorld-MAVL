@@ -40,7 +40,7 @@ def get_args_parser():
     parser.add_argument("--run_name", default="", type=str)
 
     # Dataset specific
-    parser.add_argument("--dataset_config", default=None, required=True)
+    parser.add_argument("--dataset_config", default="./configs/pretrain.json")
     parser.add_argument("--do_qa", action="store_true", help="Whether to do question answering")
     parser.add_argument(
         "--predict_final",
@@ -604,7 +604,7 @@ def main(args):
             optimizer=optimizer,
             device=device,
             epoch=epoch,
-            epoch_nc=args.epoch_nc
+            epoch_nc=args.epoch_nc,
             args=args,
             max_norm=args.clip_max_norm,
             model_ema=model_ema,

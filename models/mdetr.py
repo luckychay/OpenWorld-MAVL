@@ -595,9 +595,9 @@ class SetCriterion(nn.Module):
         target_classes_onehot.scatter_(2, target_classes.unsqueeze(-1), 1)
 
         target_classes_onehot = target_classes_onehot[:,:,:-1]
-        loss_ce = sigmoid_focal_loss(src_logits, target_classes_onehot, num_boxes, alpha=self.focal_alpha, gamma=2) * src_logits.shape[1]
+        loss_nc = sigmoid_focal_loss(src_logits, target_classes_onehot, num_boxes, alpha=self.focal_alpha, gamma=2) * src_logits.shape[1]
 
-        losses = {'loss_NC': loss_ce}
+        losses = {'loss_nc': loss_nc}
         return losses
 
     def loss_labels(self, outputs, targets, indices, num_boxes, current_epoch, owod_targets, owod_indices):
@@ -725,6 +725,12 @@ class SetCriterion(nn.Module):
         src_idx = torch.cat([src for (src, _) in indices])
         return batch_idx, src_idx
 
+    def _get_src_single_permutation_idx(self, indices, index):
+        ## Only need the src query index selection from this function for attention feature selection
+        batch_idx = [torch.full_like(src, i) for i, src in enumerate(indices)][0]
+        src_idx = indices[0]
+        return batch_idx, src_idx
+
     def _get_tgt_permutation_idx(self, indices):
         # permute targets following indices
         batch_idx = torch.cat([torch.full_like(tgt, i) for i, (_, tgt) in enumerate(indices)])
@@ -777,9 +783,9 @@ class SetCriterion(nn.Module):
                 uniques, counts = combined.unique(return_counts=True)
                 unmatched_indices = uniques[counts == 1]
                 objectnesses =  outputs['pred_logits'][i][unmatched_indices]
+                objectnesses = torch.max(objectnesses,dim=1).values
                 _, topk_inds =  torch.topk(objectnesses, self.top_unk)
-                topk_inds = torch.as_tensor(topk_inds)
-                    
+                topk_inds = torch.as_tensor(topk_inds)       
                 topk_inds = topk_inds.cpu()
 
                 unk_label = torch.as_tensor([self.num_classes-1], device=owod_device)

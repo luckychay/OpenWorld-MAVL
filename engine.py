@@ -86,7 +86,7 @@ def train_one_epoch(
         weight_dict = copy.deepcopy(criterion.weight_dict)
         ## condition for starting nc loss computation after certain epoch so that the F_cls branch has the time
         ## to learn the within classes seperation.
-        if epoch < epoch.nc: 
+        if epoch < epoch_nc: 
             for k,v in weight_dict.items():
                 if 'NC' in k:
                     weight_dict[k] = 0
