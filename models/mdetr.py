@@ -522,7 +522,7 @@ class SetCriterion(nn.Module):
         2) we supervise each pair of matched ground-truth / prediction (supervise class and box)
     """
 
-    def __init__(self, args, num_classes, matcher, eos_coef, losses, temperature, invalid_cls_logits, focal_alpha=0.25):
+    def __init__(self, args, num_classes, matcher, weight_dict, eos_coef, losses, temperature, invalid_cls_logits, focal_alpha=0.25):
         """Create the criterion.
         Parameters:
             num_classes: number of object categories, omitting the special no-object category
@@ -533,6 +533,7 @@ class SetCriterion(nn.Module):
         super().__init__()
         self.num_classes = num_classes
         self.matcher = matcher
+        self.weight_dict = weight_dict
         self.eos_coef = eos_coef
         self.losses = losses
         self.temperature = temperature
@@ -542,7 +543,7 @@ class SetCriterion(nn.Module):
         self.focal_alpha = focal_alpha
 
         ###
-        self.nc_epoch = args.nc_epoch
+        self.epoch_nc = args.epoch_nc
         self.output_dir = args.output_dir
         self.invalid_cls_logits = invalid_cls_logits
         self.unmatched_boxes = args.unmatched_boxes
@@ -582,8 +583,8 @@ class SetCriterion(nn.Module):
         owod_targets -> targets combining GT targets + psuedo labeled unknown targets
         target_classes_o -> contains all 1's
         """
-        assert 'pred_nc_logits' in outputs
-        src_logits = outputs['pred_nc_logits']
+        assert 'pred_logits_nc' in outputs
+        src_logits = outputs['pred_logits_nc']
 
         idx = self._get_src_permutation_idx(owod_indices)
         target_classes_o = torch.cat([torch.full_like(t["labels"][J], 0) for t, (_, J) in zip(owod_targets, owod_indices)])
@@ -599,7 +600,7 @@ class SetCriterion(nn.Module):
         losses = {'loss_NC': loss_ce}
         return losses
 
-    def loss_labels(self, outputs, targets, indices, num_boxes, owod_targets, owod_indices):
+    def loss_labels(self, outputs, targets, indices, num_boxes, current_epoch, owod_targets, owod_indices):
         """Classification loss (NLL)
         targets dicts must contain the key "labels" containing a tensor of dim [nb_target_boxes]
         """
@@ -640,7 +641,7 @@ class SetCriterion(nn.Module):
         raise NotImplementedError
 
     @torch.no_grad()
-    def loss_cardinality(self, outputs, targets, indices, num_boxes,owod_targets, owod_indices):
+    def loss_cardinality(self, outputs, targets, indices, num_boxes,current_epoch, owod_targets, owod_indices):
         """Compute the cardinality error, ie the absolute error in the number of predicted non-empty boxes
         This is not really a loss, it is intended for logging purposes only. It doesn't propagate gradients
         """
@@ -669,7 +670,7 @@ class SetCriterion(nn.Module):
         losses = {"cardinality_error": card_err}
         return losses
 
-    def loss_boxes(self, outputs, targets, indices, num_boxes):
+    def loss_boxes(self, outputs, targets, indices, num_boxes, current_epoch, owod_targets, owod_indices):
         """Compute the losses related to the bounding boxes, the L1 regression loss and the GIoU loss
         targets dicts must contain the key "boxes" containing a tensor of dim [nb_target_boxes, 4]
         The target boxes are expected in format (center_x, center_y, h, w), normalized by the image size.
@@ -690,7 +691,7 @@ class SetCriterion(nn.Module):
         losses["loss_giou"] = loss_giou.sum() / num_boxes
         return losses
 
-    def loss_masks(self, outputs, targets, indices, num_boxes):
+    def loss_masks(self, outputs, targets, indices, num_boxes, current_epoch, owod_targets, owod_indices):
         """Compute the losses related to the masks: the focal loss and the dice loss.
         targets dicts must contain the key "masks" containing a tensor of dim [nb_target_boxes, h, w]
         """
@@ -751,7 +752,7 @@ class SetCriterion(nn.Module):
                       The expected keys in each dict depends on the losses applied, see each loss' doc
         """
         ###
-        if self.nc_epoch > 0:
+        if self.epoch_nc > 0:
             loss_epoch = 9
         else:
             loss_epoch = 0
@@ -962,6 +963,7 @@ def build(args):
             args,
             num_classes=args.num_classes,
             matcher=matcher,
+            weight_dict=weight_dict,
             eos_coef=args.eos_coef,
             losses=losses,
             temperature=args.temperature_NCE,

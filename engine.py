@@ -68,7 +68,7 @@ def train_one_epoch(
         samples = batch_dict["samples"].to(device)
         targets = batch_dict["targets"]
         answers = {k: v.to(device) for k, v in batch_dict["answers"].items()} if "answers" in batch_dict else None
-        captions = [t["caption"] for t in targets]
+        # captions = [t["caption"] for t in targets]
 
         targets = targets_to(targets, device)
 

@@ -294,7 +294,7 @@ def get_args_parser():
     parser.add_argument("--load", default="", help="resume from checkpoint")
     parser.add_argument("--start-epoch", default=0, type=int, metavar="N", help="start epoch")
     parser.add_argument("--eval", action="store_true", help="Only run evaluation")
-    parser.add_argument("--num_workers", default=5, type=int)
+    parser.add_argument("--num_workers", default=2, type=int)
 
     # Distributed training parameters
     parser.add_argument("--world-size", default=1, type=int, help="number of distributed processes")
@@ -312,7 +312,7 @@ def get_args_parser():
     parser.add_argument('--novelty_cls', default=False, action='store_true')
     parser.add_argument('--nc_loss_coef', default=2, type=float)
     parser.add_argument('--invalid_cls_logits', default=False, action='store_true', help='owod setting')
-    parser.add_argument('--nc_epoch', default=0, type=int)
+    parser.add_argument('--epoch_nc', default=0, type=int)
     parser.add_argument('--num_classes', default=81, type=int)
     parser.add_argument('--dataset', default='owod')
     parser.add_argument('--data_root', default='./data', type=str)
@@ -604,6 +604,7 @@ def main(args):
             optimizer=optimizer,
             device=device,
             epoch=epoch,
+            epoch_nc=args.epoch_nc
             args=args,
             max_norm=args.clip_max_norm,
             model_ema=model_ema,
