@@ -57,10 +57,10 @@ def train_one_epoch(
     header = "Epoch: [{}]".format(epoch)
     print_freq = 10
 
-    ###
-    prefetcher = data_prefetcher(data_loader, device, prefetch=True)
-    samples, targets = prefetcher.next()
-    ###
+    # ###
+    # prefetcher = data_prefetcher(data_loader, device, prefetch=True)
+    # samples, targets = prefetcher.next()
+    # ###
 
     num_training_steps = int(len(data_loader) * args.epochs)
     for i, batch_dict in enumerate(metric_logger.log_every(data_loader, print_freq, header)):

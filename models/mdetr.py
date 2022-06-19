@@ -776,21 +776,30 @@ class SetCriterion(nn.Module):
          
         if self.unmatched_boxes and epoch >= loss_epoch:
             ## use unmatched boxes as an unknown object finder
-            print("waiting for implementation.")
             queries = torch.arange(outputs['pred_logits'].shape[1])
+            ## len(indices) is the batch size
             for i in range(len(indices)):
-                combined = torch.cat((queries, self._get_src_single_permutation_idx(indices[i], i)[-1])) ## need to fix the indexing
+                matched_indices = self._get_src_single_permutation_idx(indices[i], i)[-1]
+                combined = torch.cat((queries, matched_indices)) ## need to fix the indexing
                 uniques, counts = combined.unique(return_counts=True)
                 unmatched_indices = uniques[counts == 1]
-                objectnesses =  outputs['pred_logits'][i][unmatched_indices]
-                objectnesses = torch.max(objectnesses,dim=1).values
+
+                logits = outputs['pred_logits'].clone()
+                logits = logits[i]
+                for j in range(len(logits)):
+                    if j in unmatched_indices:
+                        logits[j] = torch.as_tensor([-10e10] * outputs['pred_logits'].shape[2]) 
+
+                objectnesses = torch.max(logits,dim=1).values
                 _, topk_inds =  torch.topk(objectnesses, self.top_unk)
                 topk_inds = torch.as_tensor(topk_inds)       
                 topk_inds = topk_inds.cpu()
 
                 unk_label = torch.as_tensor([self.num_classes-1], device=owod_device)
                 owod_targets[i]['labels'] = torch.cat((owod_targets[i]['labels'], unk_label.repeat_interleave(self.top_unk)))
-                owod_indices[i] = (torch.cat((owod_indices[i][0], topk_inds)), torch.cat((owod_indices[i][1], (owod_targets[i]['labels'] == unk_label).nonzero(as_tuple=True)[0].cpu())))
+                owod_indices[i] = (torch.cat((owod_indices[i][0], topk_inds)), 
+                                                torch.cat((owod_indices[i][1], 
+                                  (owod_targets[i]['labels'] == unk_label).nonzero(as_tuple=True)[0].cpu())))
         ###
 
         # Compute the average number of target boxes accross all nodes, for normalization purposes
@@ -817,7 +826,28 @@ class SetCriterion(nn.Module):
                 owod_device = aux_owod_outputs["pred_boxes"].device
 
                 if self.unmatched_boxes and epoch >= loss_epoch:
-                    print("waiting for implementation.")
+                    queries = torch.arange(outputs['pred_logits'].shape[1])
+                    for i in range(len(indices)):
+                        combined = torch.cat((queries, self._get_src_single_permutation_idx(indices[i], i)[-1])) ## need to fix the indexing
+                        uniques, counts = combined.unique(return_counts=True)
+                        unmatched_indices = uniques[counts == 1]
+                        logits = outputs['pred_logits'].clone()
+                        logits = logits[i]
+
+                        for j in range(len(logits)):
+                            if j in unmatched_indices:
+                                logits[j] = torch.as_tensor([-10e10] * outputs['pred_logits'].shape[2]) 
+
+                        objectnesses = torch.max(logits,dim=1).values
+                        _, topk_inds =  torch.topk(objectnesses, self.top_unk)
+                        topk_inds = torch.as_tensor(topk_inds)       
+                        topk_inds = topk_inds.cpu()
+
+                        unk_label = torch.as_tensor([self.num_classes-1], device=owod_device)
+                        owod_targets[i]['labels'] = torch.cat((owod_targets[i]['labels'], unk_label.repeat_interleave(self.top_unk)))
+                        owod_indices[i] = (torch.cat((owod_indices[i][0], topk_inds)), 
+                                                        torch.cat((owod_indices[i][1], 
+                                        (owod_targets[i]['labels'] == unk_label).nonzero(as_tuple=True)[0].cpu())))
                 ###
 
                 for loss in self.losses:
