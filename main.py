@@ -287,18 +287,18 @@ def get_args_parser():
 
     parser.add_argument("--test", action="store_true", help="Whether to run evaluation on val or test set")
     parser.add_argument("--test_type", type=str, default="test", choices=("testA", "testB", "test"))
-    parser.add_argument("--output-dir", default="", help="path where to save, empty for no saving")
+    parser.add_argument("--output_dir", default="/content/drive/MyDrive/mavl_output", help="path where to save, empty for no saving")
     parser.add_argument("--device", default="cuda", help="device to use for training / testing")
     parser.add_argument("--seed", default=42, type=int)
     parser.add_argument("--resume", default="", help="resume from checkpoint")
     parser.add_argument("--load", default="", help="resume from checkpoint")
-    parser.add_argument("--start-epoch", default=0, type=int, metavar="N", help="start epoch")
+    parser.add_argument("--start_epoch", default=0, type=int, metavar="N", help="start epoch")
     parser.add_argument("--eval", action="store_true", help="Only run evaluation")
     parser.add_argument("--num_workers", default=2, type=int)
 
     # Distributed training parameters
-    parser.add_argument("--world-size", default=1, type=int, help="number of distributed processes")
-    parser.add_argument("--dist-url", default="env://", help="url used to set up distributed training")
+    parser.add_argument("--world_size", default=1, type=int, help="number of distributed processes")
+    parser.add_argument("--dist_url", default="env://", help="url used to set up distributed training")
    
     ## OWOD
     parser.add_argument('--PREV_INTRODUCED_CLS', default=0, type=int)
@@ -394,10 +394,6 @@ def main(args):
     else:
         raise RuntimeError(f"Unsupported optimizer {args.optimizer}")
 
-    # # Train dataset
-    # if len(args.combine_datasets) == 0 and not args.eval:
-    #     raise RuntimeError("Please provide at least one training dataset")
-
     dataset_train, sampler_train, data_loader_train = None, None, None
     dataset_train, dataset_val = get_datasets(args)
     if not args.eval:
@@ -443,36 +439,17 @@ def main(args):
                 num_workers=args.num_workers,
             )
 
-    # # Val dataset
-    # if len(args.combine_datasets_val) == 0:
-    #     raise RuntimeError("Please provide at leas one validation dataset")
-
     Val_all = namedtuple(typename="val_data", field_names=["dataset_name", "dataloader", "base_ds", "evaluator_list"])
     val_tuples = []
-    # for dset_name in args.combine_datasets_val:
-    #     dset = build_dataset(dset_name, image_set="val", args=args)
-    #     sampler = (
-    #         DistributedSampler(dset, shuffle=False) if args.distributed else torch.utils.data.SequentialSampler(dset)
-    #     )
-    #     dataloader = DataLoader(
-    #         dset,
-    #         args.batch_size,
-    #         sampler=sampler,
-    #         drop_last=False,
-    #         collate_fn=partial(utils.collate_fn, False),
-    #         num_workers=args.num_workers,
-    #     )
-    #     base_ds = get_coco_api_from_dataset(dset)
-    #     val_tuples.append(Val_all(dataset_name=dset_name, dataloader=dataloader, base_ds=base_ds, evaluator_list=None))
 
     sampler_val = (
             DistributedSampler(dataset_val, shuffle=False) if args.distributed else torch.utils.data.SequentialSampler(dataset_val)
          )
     data_loader_val = DataLoader(dataset_val, args.batch_size, sampler=sampler_val,
-                                 drop_last=False, collate_fn=utils.collate_fn, num_workers=args.num_workers,
+                                 drop_last=False, collate_fn=partial(utils.collate_fn,False), num_workers=args.num_workers,
                                  pin_memory=True)
-    base_ds = get_coco_api_from_dataset(dataset_val)
-    val_tuples.append(Val_all(dataset_name="coco", dataloader=data_loader_val, base_ds=base_ds, evaluator_list=None))
+    base_ds = dataset_val
+    val_tuples.append(Val_all(dataset_name="owod", dataloader=data_loader_val, base_ds=base_ds, evaluator_list=None))
 
 
     if args.frozen_weights is not None:
@@ -527,7 +504,7 @@ def main(args):
         if args.masks:
             iou_types.append("segm")
 
-        evaluator_list.append(CocoEvaluator(base_ds, tuple(iou_types), useCats=False))
+        # evaluator_list.append(CocoEvaluator(base_ds, tuple(iou_types), useCats=False))
         if "refexp" in dataset_name:
             evaluator_list.append(RefExpEvaluator(base_ds, ("bbox")))
         if "clevrref" in dataset_name:
@@ -570,6 +547,8 @@ def main(args):
                 data_loader=item.dataloader,
                 evaluator_list=item.evaluator_list,
                 device=device,
+                base_ds=base_ds,
+                output_dir=output_dir,
                 args=args,
             )
             test_stats.update({item.dataset_name + "_" + k: v for k, v in curr_test_stats.items()})

@@ -169,16 +169,17 @@ def evaluate(  # TODO: Revisit evaluator as per the minus_language thing
 
     ###
     iou_types = tuple(k for k in ('segm', 'bbox') if k in postprocessors.keys())
-    coco_evaluator = OWEvaluator(base_ds, iou_types)
-    evaluator_list.append(coco_evaluator)
+    ow_evaluator = OWEvaluator(base_ds, iou_types, args)
+    evaluator_list.append(ow_evaluator)
+    print_freq = 10
     ###
 
-    for batch_dict in metric_logger.log_every(data_loader, 10, header):
+    for i, batch_dict in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
         samples = batch_dict["samples"].to(device)
         positive_map = batch_dict["positive_map"].to(device) if "positive_map" in batch_dict else None
         targets = batch_dict["targets"]
         answers = {k: v.to(device) for k, v in batch_dict["answers"].items()} if "answers" in batch_dict else None
-        captions = [t["caption"] for t in targets]
+        # captions = [t["caption"] for t in targets]
 
         targets = targets_to(targets, device)
 
@@ -261,10 +262,9 @@ def evaluate(  # TODO: Revisit evaluator as per the minus_language thing
     flickr_res = None
     phrasecut_res = None
     for evaluator in evaluator_list:
-        if isinstance(evaluator, CocoEvaluator):
+        if isinstance(evaluator, (CocoEvaluator,OWEvaluator)):
             evaluator.accumulate()
             evaluator.summarize()
-
         elif isinstance(evaluator, (RefExpEvaluator, ClevrRefEvaluator)):
             refexp_res = evaluator.summarize()
         elif isinstance(evaluator, FlickrEvaluator):
