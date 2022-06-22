@@ -4,6 +4,7 @@ MDETR model and criterion classes.
 """
 from typing import Dict, Optional
 
+import math
 import torch
 import torch.distributed
 import torch.nn.functional as F
@@ -70,7 +71,7 @@ class MDETR(nn.Module):
         self.num_queries = num_queries
         self.transformer = transformer
         hidden_dim = transformer.d_model
-        self.class_embed = nn.Linear(hidden_dim, num_classes + 1)
+        self.class_embed = nn.Linear(hidden_dim, num_classes + 1) #diff
         self.isfinal_embed = nn.Linear(hidden_dim, 1) if predict_final else None
         self.bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3)
         self.query_embed = nn.Embedding(num_queries, 2*hidden_dim)
@@ -110,6 +111,21 @@ class MDETR(nn.Module):
         self.backbone = backbone
         self.aux_loss = aux_loss
         self.contrastive_loss = contrastive_loss
+
+        ###
+        prior_prob = 0.01
+        bias_value = -math.log((1 - prior_prob) / prior_prob)
+        self.class_embed.bias.data = torch.ones(num_classes) * bias_value
+
+        if self.novelty_cls:
+            self.nc_class_embed.bias.data = torch.ones(1) * bias_value
+
+        nn.init.constant_(self.bbox_embed.layers[-1].weight.data, 0)
+        nn.init.constant_(self.bbox_embed.layers[-1].bias.data, 0)
+        for proj in self.input_proj:
+            nn.init.xavier_uniform_(proj[0].weight, gain=1)
+            nn.init.constant_(proj[0].bias, 0)
+        ###
 
         num_pred = (transformer.decoder.num_layers + 1) if two_stage else transformer.decoder.num_layers
         if with_box_refine:
