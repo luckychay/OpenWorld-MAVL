@@ -55,7 +55,7 @@ def train_one_epoch(
     metric_logger.add_meter("lr_backbone", SmoothedValue(window_size=1, fmt="{value:.6f}"))
     metric_logger.add_meter("lr_text_encoder", SmoothedValue(window_size=1, fmt="{value:.6f}"))
     header = "Epoch: [{}]".format(epoch)
-    print_freq = 10
+    print_freq = 100
 
     # ###
     # prefetcher = data_prefetcher(data_loader, device, prefetch=True)
@@ -78,7 +78,7 @@ def train_one_epoch(
         else:
             memory_cache = model(samples, encode_and_save=True)
             outputs = model(samples, encode_and_save=False, memory_cache=memory_cache)
-
+        print("logits:", outputs["pred_logits"])
         loss_dict = {}
         if criterion is not None:
             loss_dict.update(criterion(outputs, targets, epoch))  # Update criterion to account for targets only
@@ -171,7 +171,7 @@ def evaluate(  # TODO: Revisit evaluator as per the minus_language thing
     iou_types = tuple(k for k in ('segm', 'bbox') if k in postprocessors.keys())
     ow_evaluator = OWEvaluator(base_ds, iou_types, args)
     evaluator_list.append(ow_evaluator)
-    print_freq = 10
+    print_freq = 100
     ###
 
     for i, batch_dict in enumerate(metric_logger.log_every(data_loader, print_freq, header)):

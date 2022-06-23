@@ -304,6 +304,9 @@ class MDETR(nn.Module):
                 outputs_coords.append(outputs_coord)
             outputs_class = torch.stack(outputs_classes)
             outputs_coord = torch.stack(outputs_coords)
+
+            print("outputs_class:",outputs_class)
+
             ###
             if self.novelty_cls:
                 outputs_class_nc = torch.stack(outputs_classes_nc)
@@ -329,6 +332,7 @@ class MDETR(nn.Module):
             ###
 
             outputs_isfinal = None
+            print("self.isfinal_embed:",self.isfinal_embed)
             if self.isfinal_embed is not None:
                 outputs_isfinal = self.isfinal_embed(hs)
                 out["pred_isfinal"] = outputs_isfinal[-1]
@@ -952,7 +956,7 @@ def build(args):
         )
     matcher = build_matcher(args)
 
-    weight_dict = {"loss_ce": args.ce_loss_coef, "loss_bbox": args.bbox_loss_coef}
+    weight_dict = {"loss_ce": args.cls_loss_coef, "loss_bbox": args.bbox_loss_coef}
         
     ###
     if args.novelty_cls:
