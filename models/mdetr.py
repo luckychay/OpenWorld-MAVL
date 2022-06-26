@@ -17,7 +17,6 @@ from util.misc import NestedTensor, interpolate, inverse_sigmoid
 
 from .backbone import build_backbone
 from .matcher import build_matcher
-from .postprocessors import build_postprocessors
 from .segmentation import DETRsegm, dice_loss, sigmoid_focal_loss
 from .transformer import build_transformer
 from .deformable_transformer import build_deforamble_transformer
@@ -71,7 +70,7 @@ class MDETR(nn.Module):
         self.num_queries = num_queries
         self.transformer = transformer
         hidden_dim = transformer.d_model
-        self.class_embed = nn.Linear(hidden_dim, num_classes + 1) #diff
+        self.class_embed = nn.Linear(hidden_dim, num_classes) #diff
         self.isfinal_embed = nn.Linear(hidden_dim, 1) if predict_final else None
         self.bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3)
         self.query_embed = nn.Embedding(num_queries, 2*hidden_dim)
