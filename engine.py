@@ -78,7 +78,6 @@ def train_one_epoch(
         else:
             memory_cache = model(samples, encode_and_save=True)
             outputs = model(samples, encode_and_save=False, memory_cache=memory_cache)
-        print("logits:", outputs["pred_logits"])
         loss_dict = {}
         if criterion is not None:
             loss_dict.update(criterion(outputs, targets, epoch))  # Update criterion to account for targets only
@@ -88,7 +87,7 @@ def train_one_epoch(
         ## to learn the within classes seperation.
         if epoch < epoch_nc: 
             for k,v in weight_dict.items():
-                if 'NC' in k:
+                if 'nc' in k:
                     weight_dict[k] = 0
 
         if contrastive_criterion is not None:

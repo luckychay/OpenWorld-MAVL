@@ -111,7 +111,7 @@ class OWOD(VisionDataset):
             # base_dir = DATASET_YEAR_DICT[year]['base_dir']
             voc_root = self.root
             annotation_dir = os.path.join(voc_root, "Annotations")
-            image_dir = os.path.join("/content/drive/MyDrive/", "JPEGImages")
+            image_dir = os.path.join(voc_root, "JPEGImages")
 
             if not os.path.isdir(voc_root):
                 raise RuntimeError('Dataset not found or corrupted.' +

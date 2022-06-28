@@ -304,8 +304,6 @@ class MDETR(nn.Module):
             outputs_class = torch.stack(outputs_classes)
             outputs_coord = torch.stack(outputs_coords)
 
-            print("outputs_class:",outputs_class)
-
             ###
             if self.novelty_cls:
                 outputs_class_nc = torch.stack(outputs_classes_nc)
@@ -331,7 +329,6 @@ class MDETR(nn.Module):
             ###
 
             outputs_isfinal = None
-            print("self.isfinal_embed:",self.isfinal_embed)
             if self.isfinal_embed is not None:
                 outputs_isfinal = self.isfinal_embed(hs)
                 out["pred_isfinal"] = outputs_isfinal[-1]
